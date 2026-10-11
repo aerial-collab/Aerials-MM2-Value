@@ -81,6 +81,11 @@ td.num{font-weight:700;font-size:1.1rem}
 .tcell{aspect-ratio:1;font:700 3.4rem/1 "Barlow Condensed",sans-serif;background:var(--panel);border:2px solid var(--line);border-radius:12px;padding:0}
 .tcell.x{color:var(--tape)}.tcell.o{color:#6ec1ff}
 .tcell.win{border-color:var(--ok);background:#1d3a2c}
+.gtitle{font:700 1.8rem "Barlow Condensed",sans-serif;margin:8px 0 2px}
+.tcell.old{outline:2px dashed var(--tape);outline-offset:-7px;opacity:.7}
+.tcell.steal{border-color:var(--bad)}
+.tcell:not(:disabled){cursor:pointer}
+.tcell.steal:hover{background:#3a2430}
 </style>
 </head>
 <body>
@@ -136,12 +141,16 @@ td.num{font-weight:700;font-size:1.1rem}
     <div id="gmenu">
       <p class="small">Pick a game.</p>
       <div class="ggrid">
-        <button class="gcard" id="g-ttt"><b>Tic Tac Toe</b><span class="small">Play the AI or a friend</span></button>
+        <button class="gcard" data-variant="classic"><b>Tic Tac Toe</b><span class="small">The classic. Play the AI or a friend</span></button>
+        <button class="gcard" data-variant="infinite"><b>Infinite Tic Tac Toe</b><span class="small">Only 3 marks each: your oldest one vanishes</span></button>
+        <button class="gcard" data-variant="takeover"><b>Takeover Tic Tac Toe</b><span class="small">Steal your opponent's squares</span></button>
         <div class="gcard soon"><b>More games</b><span class="small">Coming soon</span></div>
       </div>
     </div>
     <div id="ttt" hidden>
       <div class="bar"><button id="ttt-back">All games</button></div>
+      <h3 id="ttt-title" class="gtitle"></h3>
+      <p class="small" id="ttt-rules"></p>
       <div class="chips" role="group" aria-label="Game mode">
         <button class="chip" data-mode="ai" aria-pressed="true">Play the AI</button>
         <button class="chip" data-mode="two" aria-pressed="false">2 players (this laptop)</button>
@@ -156,6 +165,7 @@ td.num{font-weight:700;font-size:1.1rem}
         <p class="small" id="ttt-desc"></p>
         <label class="small"><input type="checkbox" id="ttt-first"> Let the AI start</label>
       </div>
+      <label class="small" id="ttt-old-wrap" hidden><input type="checkbox" id="ttt-old" checked> Show oldest marks (dashed)</label>
       <div id="ttt-status" class="tstatus" aria-live="polite"></div>
       <div id="ttt-board" class="tboard"></div>
       <p class="small" id="ttt-score"></p>
@@ -463,7 +473,7 @@ async function ask() {
     else {
       let detail = ""; try { detail = (await r.json()).error || ""; } catch (e) { /* not JSON */ }
       why = r.status === 404 || r.status === 405 ? "the live site doesn't have the AI function yet. Deploy the whole folder again (Cloudflare needs _worker.js, Vercel needs the api folder)."
-        : r.status === 501 ? "the AI isn't switched on yet. Cloudflare: add a Workers AI binding named AI (or a secret ANTHROPIC_API_KEY). Vercel: add the environment variable ANTHROPIC_API_KEY. Then deploy again."
+        : r.status === 501 ? (detail || "the AI isn't switched on yet. Cloudflare: add a Workers AI binding named AI (or a secret ANTHROPIC_API_KEY). Vercel: add the environment variable ANTHROPIC_API_KEY. Then deploy again.")
         : r.status === 403 ? "the AI only answers requests that come from your own site address."
         : (detail || "the AI service returned an error (" + r.status + "). Try again in a minute.");
     }
@@ -472,86 +482,134 @@ async function ask() {
   $("#aimode").textContent = ai ? "Answered by AI, using the values on this site." : "Basic mode: " + why;
 }
 
-// ---- Games: Tic Tac Toe ----
+// ---- Games: Tic Tac Toe, Infinite and Takeover ----
 const LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+const VARIANTS = {
+  classic: { title: "Tic Tac Toe", cap: 9, rules: "Get three in a row before your opponent does." },
+  infinite: { title: "Infinite Tic Tac Toe", cap: 60, rules: "You can only have 3 marks on the board. When you place your 4th, your oldest mark vanishes. Get three in a row. If nobody wins after 60 moves it's a draw." },
+  takeover: { title: "Takeover Tic Tac Toe", cap: 40, rules: "Place your first 3 marks. After that you can place a mark on an empty square, or click one of your opponent's marks to take its place (their mark disappears). You can't take back the square that was just taken from you. If nobody wins after 40 moves it's a draw." } };
+const DEPTH = { classic: { "Hard": 4, "Extra Hard": 9 }, infinite: { "Hard": 3, "Extra Hard": 14 }, takeover: { "Hard": 3, "Extra Hard": 10 } };
 const LEVEL_INFO = { "Easy": "Easy: moves at random.", "Medium": "Medium: takes a win and blocks yours, otherwise moves at random.",
-  "Hard": "Hard: plays very well but slips up now and then.", "Extra Hard": "Extra Hard: perfect play. It can't be beaten, the best you can do is a draw." };
-const T = { board: Array(9).fill(""), turn: "X", over: false, line: [], result: "", mode: "ai", level: "Medium", aiFirst: false, gen: 0, score: { me: 0, draw: 0, other: 0 } };
+  "Hard": "Hard: thinks a few moves ahead but slips up now and then.", "Extra Hard": "Extra Hard: searches far ahead and plays like an expert. In classic Tic Tac Toe it can't be beaten." };
+const T = { variant: "classic", mode: "ai", level: "Medium", aiFirst: false, showOld: true, gen: 0, s: null, score: { me: 0, draw: 0, other: 0 } };
+const other = p => p === "X" ? "O" : "X";
 const winnerOf = b => { for (const l of LINES) if (b[l[0]] && b[l[0]] === b[l[1]] && b[l[0]] === b[l[2]]) return { who: b[l[0]], line: l }; return null; };
-const freeCells = b => b.flatMap((v, i) => v ? [] : [i]);
 const humanSym = () => T.aiFirst ? "O" : "X", aiSym = () => T.aiFirst ? "X" : "O";
+const PRI = [2,1,2,1,3,1,2,1,2];
 
-function minimax(b, turn, ai, depth) {
-  const w = winnerOf(b); if (w) return w.who === ai ? 10 - depth : depth - 10;
-  const free = freeCells(b); if (!free.length) return 0;
-  let best = turn === ai ? -Infinity : Infinity;
-  for (const i of free) { b[i] = turn; const s = minimax(b, turn === "X" ? "O" : "X", ai, depth + 1); b[i] = ""; best = turn === ai ? Math.max(best, s) : Math.min(best, s); }
+// A state holds the board, each player's marks in the order they were placed, and how many moves each has made.
+// A move is a square number 0-8 (place a mark) or 9-17 (take over square move-9, Takeover only).
+function newState() { return { b: Array(9).fill(""), q: { X: [], O: [] }, cnt: { X: 0, O: 0 }, turn: "X", n: 0, last: -1, res: "", line: [] }; }
+function legalMoves(v, s) {
+  const t = s.turn, o = other(t), m = [];
+  for (let i = 0; i < 9; i++) if (!s.b[i]) m.push(i);
+  if (v === "takeover" && s.cnt[t] >= 3) for (let i = 0; i < 9; i++) if (s.b[i] === o && i !== s.last) m.push(i + 9);
+  return m.sort((a, b) => PRI[b % 9] - PRI[a % 9]);
+}
+function applyMove(v, s, m) {
+  const t = s.turn, o = other(t), c = m % 9, b = s.b.slice(), q = { X: s.q.X.slice(), O: s.q.O.slice() };
+  if (m >= 9) q[o].splice(q[o].indexOf(c), 1);
+  b[c] = t; q[t].push(c);
+  if (v === "infinite" && q[t].length > 3) b[q[t].shift()] = "";
+  const w = winnerOf(b), n = s.n + 1;
+  const res = w ? w.who : (v === "classic" ? (n === 9 ? "draw" : "") : (n >= VARIANTS[v].cap ? "draw" : ""));
+  return { b, q, cnt: { X: s.cnt.X + (t === "X" ? 1 : 0), O: s.cnt.O + (t === "O" ? 1 : 0) }, turn: o, n, last: m >= 9 ? c : -1, res, line: w ? w.line : [] };
+}
+function heuristic(s) {
+  let sc = 0; const me = s.turn, op = other(me);
+  for (const l of LINES) { const m = l.filter(i => s.b[i] === me).length, o = l.filter(i => s.b[i] === op).length; if (!o) sc += m * m; if (!m) sc -= o * o; }
+  return sc;
+}
+function search(v, s, depth, alpha, beta) {            // score for the player whose turn it is in s
+  if (s.res) return s.res === "draw" ? 0 : -(1000 + depth);
+  if (depth === 0) return heuristic(s);
+  const moves = legalMoves(v, s); if (!moves.length) return 0;
+  let best = -Infinity;
+  for (const m of moves) {
+    const sc = -search(v, applyMove(v, s, m), depth - 1, -beta, -alpha);
+    if (sc > best) best = sc;
+    if (best > alpha) alpha = best;
+    if (alpha >= beta) break;
+  }
   return best;
 }
-function perfectMove(b, ai) {
-  const other = ai === "X" ? "O" : "X"; let top = -Infinity, moves = [];
-  for (const i of freeCells(b)) { b[i] = ai; const s = minimax(b, other, ai, 1); b[i] = ""; if (s > top) { top = s; moves = [i]; } else if (s === top) moves.push(i); }
-  return pick(moves);
-}
-function simpleMove(b, ai) {                       // take a win, else block, else random
-  const other = ai === "X" ? "O" : "X";
-  for (const p of [ai, other]) for (const i of freeCells(b)) { b[i] = p; const w = winnerOf(b); b[i] = ""; if (w) return i; }
-  return pick(freeCells(b));
-}
-function aiPick(b, ai, level) {
-  if (level === "Easy") return pick(freeCells(b));
-  if (level === "Medium") return simpleMove(b, ai);
-  if (level === "Hard" && Math.random() < 0.2) return simpleMove(b, ai);
-  return perfectMove(b, ai);
+function aiChoose(v, s, level) {
+  const moves = legalMoves(v, s), me = s.turn, op = other(me);
+  if (level === "Easy") return pick(moves);
+  const medium = () => {                               // take a win, else avoid moves that let the opponent win at once
+    const win = moves.filter(m => applyMove(v, s, m).res === me); if (win.length) return pick(win);
+    const safe = moves.filter(m => { const ns = applyMove(v, s, m); return !legalMoves(v, ns).some(r => applyMove(v, ns, r).res === op); });
+    return pick(safe.length ? safe : moves);
+  };
+  if (level === "Medium") return medium();
+  if (level === "Hard" && Math.random() < 0.15) return medium();
+  const depth = DEPTH[v][level]; let best = -Infinity, bestMoves = [];
+  for (const m of moves) {
+    const sc = -search(v, applyMove(v, s, m), depth - 1, -Infinity, Infinity);
+    if (sc > best) { best = sc; bestMoves = [m]; } else if (sc === best) bestMoves.push(m);
+  }
+  return pick(bestMoves);
 }
 
+function moveForCell(c) {
+  if (T.s.res) return null;
+  const m = T.s.b[c] ? c + 9 : c; return legalMoves(T.variant, T.s).includes(m) ? m : null;
+}
 function tttStatus() {
-  if (T.over) {
-    if (T.result === "draw") return "It's a draw.";
-    if (T.mode === "ai") return T.result === aiSym() ? "The AI wins. Try again!" : "You win!";
-    return "Player " + (T.result === "X" ? 1 : 2) + " (" + T.result + ") wins!";
+  const s = T.s, sym = s.turn;
+  if (s.res) {
+    if (s.res === "draw") return "It's a draw.";
+    if (T.mode === "ai") return s.res === aiSym() ? "The AI wins. Try again!" : "You win!";
+    return "Player " + (s.res === "X" ? 1 : 2) + " (" + s.res + ") wins!";
   }
-  if (T.mode === "ai") return T.turn === humanSym() ? "Your turn (" + humanSym() + ")" : "AI is thinking…";
-  return "Player " + (T.turn === "X" ? 1 : 2) + "'s turn (" + T.turn + ")";
+  let msg = T.mode === "ai" ? (sym === humanSym() ? "Your turn (" + sym + ")" : "AI is thinking…") : "Player " + (sym === "X" ? 1 : 2) + "'s turn (" + sym + ")";
+  if (T.variant === "takeover" && (T.mode === "two" || sym === humanSym()))
+    msg += s.cnt[sym] < 3 ? ": place a mark (" + (s.cnt[sym] + 1) + " of 3, then you can take over)" : ": place a mark or click an opponent's mark to take it over";
+  return msg;
 }
 function tttRender() {
+  const s = T.s, old = new Set();
+  if (T.variant === "infinite" && T.showOld) ["X", "O"].forEach(p => { if (s.q[p].length === 3) old.add(s.q[p][0]); });
   $("#ttt-board").querySelectorAll("button").forEach((c, i) => {
-    const v = T.board[i]; c.textContent = v; c.className = "tcell" + (v ? " " + v.toLowerCase() : "") + (T.line.includes(i) ? " win" : "");
-    c.disabled = T.over || !!v || (T.mode === "ai" && T.turn !== humanSym());
-    c.setAttribute("aria-label", "Square " + (i + 1) + (v ? ", " + v : ", empty"));
+    const v = s.b[i], can = !s.res && (T.mode === "two" || s.turn === humanSym()) && moveForCell(i) !== null;
+    c.textContent = v;
+    c.className = "tcell" + (v ? " " + v.toLowerCase() : "") + (s.line.includes(i) ? " win" : "") + (old.has(i) ? " old" : "") + (can && v ? " steal" : "");
+    c.disabled = !can;
+    c.setAttribute("aria-label", "Square " + (i + 1) + (v ? ", " + v : ", empty") + (old.has(i) ? ", oldest mark" : "") + (can && v ? ", you can take it over" : ""));
   });
   $("#ttt-status").textContent = tttStatus();
-  const s = T.score; $("#ttt-score").textContent = T.mode === "ai" ? "You " + s.me + " | Draws " + s.draw + " | AI " + s.other : "Player 1 " + s.me + " | Draws " + s.draw + " | Player 2 " + s.other;
+  const sc = T.score; $("#ttt-score").textContent = T.mode === "ai" ? "You " + sc.me + " | Draws " + sc.draw + " | AI " + sc.other : "Player 1 " + sc.me + " | Draws " + sc.draw + " | Player 2 " + sc.other;
 }
 function tttNew() {
-  T.gen++; T.board = Array(9).fill(""); T.turn = "X"; T.over = false; T.line = []; T.result = "";
-  $("#ttt-ai").hidden = T.mode !== "ai"; $("#ttt-desc").textContent = LEVEL_INFO[T.level];
+  T.gen++; T.s = newState(); $("#ttt-ai").hidden = T.mode !== "ai"; $("#ttt-desc").textContent = LEVEL_INFO[T.level];
   tttRender(); tttSchedule();
 }
 function tttSchedule() {
-  if (T.mode !== "ai" || T.over || T.turn !== aiSym()) return;
-  const g = T.gen; setTimeout(() => { if (g === T.gen && !T.over) tttMove(aiPick(T.board, aiSym(), T.level)); }, 450);
+  if (T.mode !== "ai" || T.s.res || T.s.turn !== aiSym()) return;
+  const g = T.gen; setTimeout(() => { if (g === T.gen && !T.s.res) tttMove(aiChoose(T.variant, T.s, T.level)); }, 450);
 }
-function tttMove(i) {
-  if (T.over || T.board[i]) return;
-  T.board[i] = T.turn; const w = winnerOf(T.board);
-  if (w || !freeCells(T.board).length) {
-    T.over = true; T.line = w ? w.line : []; T.result = w ? w.who : "draw";
-    const mine = T.mode === "ai" ? humanSym() : "X";
-    if (!w) T.score.draw++; else if (w.who === mine) T.score.me++; else T.score.other++;
-  } else T.turn = T.turn === "X" ? "O" : "X";
+function tttMove(m) {
+  T.s = applyMove(T.variant, T.s, m);
+  if (!T.s.res && !legalMoves(T.variant, T.s).length) T.s.res = "draw";
+  if (T.s.res) { const mine = T.mode === "ai" ? humanSym() : "X"; if (T.s.res === "draw") T.score.draw++; else if (T.s.res === mine) T.score.me++; else T.score.other++; }
   tttRender(); tttSchedule();
+}
+function tttOpen(v) {
+  T.variant = v; T.score = { me: 0, draw: 0, other: 0 };
+  $("#ttt-title").textContent = VARIANTS[v].title; $("#ttt-rules").textContent = VARIANTS[v].rules; $("#ttt-old-wrap").hidden = v !== "infinite";
+  $("#gmenu").hidden = true; $("#ttt").hidden = false; tttNew();
 }
 function tttSetup() {
   const board = $("#ttt-board");
-  for (let i = 0; i < 9; i++) { const c = el("button", null, "tcell"); c.onclick = () => { if (T.mode === "ai" && T.turn !== humanSym()) return; tttMove(i); }; board.append(c); }
+  for (let i = 0; i < 9; i++) { const c = el("button", null, "tcell"); c.onclick = () => { const m = moveForCell(i); if (m !== null && (T.mode === "two" || T.s.turn === humanSym())) tttMove(m); }; board.append(c); }
   const press = (sel, key, val) => document.querySelectorAll(sel).forEach(b => b.onclick = () => {
     T[key] = b.dataset[val]; document.querySelectorAll(sel).forEach(o => o.setAttribute("aria-pressed", String(o === b)));
     T.score = { me: 0, draw: 0, other: 0 }; tttNew(); });
   press("[data-mode]", "mode", "mode"); press("[data-level]", "level", "level");
   $("#ttt-first").onchange = e => { T.aiFirst = e.target.checked; T.score = { me: 0, draw: 0, other: 0 }; tttNew(); };
+  $("#ttt-old").onchange = e => { T.showOld = e.target.checked; tttRender(); };
   $("#ttt-new").onclick = tttNew;
-  $("#g-ttt").onclick = () => { $("#gmenu").hidden = true; $("#ttt").hidden = false; tttNew(); };
+  document.querySelectorAll("[data-variant]").forEach(b => b.onclick = () => tttOpen(b.dataset.variant));
   $("#ttt-back").onclick = () => { T.gen++; $("#ttt").hidden = true; $("#gmenu").hidden = false; };
 }
 tttSetup();
