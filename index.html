@@ -73,6 +73,14 @@ td.num{font-weight:700;font-size:1.1rem}
 .logentry{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 18px}
 .logentry h3{font:700 1.5rem "Barlow Condensed",sans-serif;margin:0}
 .logentry ul{margin:8px 0 0;padding-left:20px}
+.ggrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}
+.gcard{display:flex;flex-direction:column;gap:4px;align-items:flex-start;text-align:left;padding:16px;font-size:1.1rem;background:var(--panel);border:1px solid var(--line);border-radius:12px}
+.gcard.soon{opacity:.55;color:var(--text)}
+.tstatus{font:700 1.5rem "Barlow Condensed",sans-serif;margin:10px 0}
+.tboard{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;max-width:360px;margin:8px 0 12px}
+.tcell{aspect-ratio:1;font:700 3.4rem/1 "Barlow Condensed",sans-serif;background:var(--panel);border:2px solid var(--line);border-radius:12px;padding:0}
+.tcell.x{color:var(--tape)}.tcell.o{color:#6ec1ff}
+.tcell.win{border-color:var(--ok);background:#1d3a2c}
 </style>
 </head>
 <body>
@@ -87,6 +95,7 @@ td.num{font-weight:700;font-size:1.1rem}
     <button role="tab" id="t-values" aria-selected="true" data-tab="values">Values</button>
     <button role="tab" id="t-calc" aria-selected="false" data-tab="calc">Trade calculator</button>
     <button role="tab" id="t-ai" aria-selected="false" data-tab="ai">Ask AI</button>
+    <button role="tab" id="t-games" aria-selected="false" data-tab="games">Games</button>
     <button role="tab" id="t-log" aria-selected="false" data-tab="log">Update logs</button>
   </div>
 
@@ -122,8 +131,44 @@ td.num{font-weight:700;font-size:1.1rem}
     </div>
     <p class="small" id="aimode"></p>
   </section>
+  <section id="tab-games" hidden>
+    <h2>Games</h2>
+    <div id="gmenu">
+      <p class="small">Pick a game.</p>
+      <div class="ggrid">
+        <button class="gcard" id="g-ttt"><b>Tic Tac Toe</b><span class="small">Play the AI or a friend</span></button>
+        <div class="gcard soon"><b>More games</b><span class="small">Coming soon</span></div>
+      </div>
+    </div>
+    <div id="ttt" hidden>
+      <div class="bar"><button id="ttt-back">All games</button></div>
+      <div class="chips" role="group" aria-label="Game mode">
+        <button class="chip" data-mode="ai" aria-pressed="true">Play the AI</button>
+        <button class="chip" data-mode="two" aria-pressed="false">2 players (this laptop)</button>
+      </div>
+      <div id="ttt-ai">
+        <div class="chips" role="group" aria-label="AI difficulty">
+          <button class="chip" data-level="Easy" aria-pressed="false">Easy</button>
+          <button class="chip" data-level="Medium" aria-pressed="true">Medium</button>
+          <button class="chip" data-level="Hard" aria-pressed="false">Hard</button>
+          <button class="chip" data-level="Extra Hard" aria-pressed="false">Extra Hard</button>
+        </div>
+        <p class="small" id="ttt-desc"></p>
+        <label class="small"><input type="checkbox" id="ttt-first"> Let the AI start</label>
+      </div>
+      <div id="ttt-status" class="tstatus" aria-live="polite"></div>
+      <div id="ttt-board" class="tboard"></div>
+      <p class="small" id="ttt-score"></p>
+      <div class="bar"><button id="ttt-new">New game</button></div>
+    </div>
+  </section>
   <section id="tab-log" hidden>
     <h2>Update logs</h2>
+    <article class="logentry">
+      <h3>Update 1.2</h3>
+      <p class="small">11 October</p>
+      <ul><li>Added games</li><li>Fixed AI</li></ul>
+    </article>
     <article class="logentry">
       <h3>Update 1.1</h3>
       <p class="small">10 October</p>
@@ -334,7 +379,7 @@ let catalog = null;
 function smalltalk(t, hits) {
   const short = t.trim().split(/\s+/).length <= 5;
   if (!hits.length && /\b(?:turn(?:ing)? (?:it |the ai |this )?on|switch(?:ing)? (?:it |the ai |this )?on|enable|set ?up|how do i do that|how to do that|activate)\b/.test(t))
-    return "To switch the AI on:\n1. Upload the whole folder (including _worker.js) to Cloudflare Pages.\n2. In your Pages project open Settings, then Bindings, and add a Workers AI binding named AI.\n3. Upload the folder again.\n4. Open your live pages.dev address and talk to me there.\nThe line under this chat will tell you what is still missing.";
+    return "To switch the AI on:\n1. Deploy the whole folder to Cloudflare Pages or Vercel.\n2. Cloudflare: Settings, Bindings, add a Workers AI binding named AI. Vercel: Settings, Environment Variables, add ANTHROPIC_API_KEY.\n3. Deploy again.\n4. Open your live address and talk to me there.\nThe line under this chat will tell you what is still missing.";
   if (!hits.length && /\b(?:i have an? question|can i ask|quick question|i need help|i need some help)\b/.test(t)) return pick(["Of course, ask away! If it's about a trade or an item's value I can answer right away.", "Sure, go ahead!"]);
   if (/\b(?:thanks|thank you|thx|ty|tysm|cheers|appreciate it)\b/.test(t) && (short || !hits.length))
     return pick(["You're welcome! Let me know if you want to check another trade.", "Anytime! Happy trading.", "No problem, glad I could help!"]);
@@ -417,15 +462,99 @@ async function ask() {
     if (r.ok) { const j = await r.json(); if (j.answer) { text = j.answer; ai = true; } }
     else {
       let detail = ""; try { detail = (await r.json()).error || ""; } catch (e) { /* not JSON */ }
-      why = r.status === 404 || r.status === 405 ? "the live site doesn't have the AI worker yet. Upload the whole folder again, including the _worker.js file."
-        : r.status === 501 ? "the AI isn't switched on in Cloudflare yet. In your Pages project open Settings, Bindings, add a Workers AI binding named AI, then upload the folder again."
+      why = r.status === 404 || r.status === 405 ? "the live site doesn't have the AI function yet. Deploy the whole folder again (Cloudflare needs _worker.js, Vercel needs the api folder)."
+        : r.status === 501 ? "the AI isn't switched on yet. Cloudflare: add a Workers AI binding named AI (or a secret ANTHROPIC_API_KEY). Vercel: add the environment variable ANTHROPIC_API_KEY. Then deploy again."
         : r.status === 403 ? "the AI only answers requests that come from your own site address."
         : (detail || "the AI service returned an error (" + r.status + "). Try again in a minute.");
     }
-  } catch (e) { why = "I can't reach the AI. It only works on the live Cloudflare site (your pages.dev address), not when the file is opened on a computer or in a preview."; }
+  } catch (e) { why = "I can't reach the AI. It only works on the live site (your pages.dev or vercel.app address), not when the file is opened on a computer or in a preview."; }
   wait.textContent = text; chat.push({ role: "assistant", content: text });
   $("#aimode").textContent = ai ? "Answered by AI, using the values on this site." : "Basic mode: " + why;
 }
+
+// ---- Games: Tic Tac Toe ----
+const LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+const LEVEL_INFO = { "Easy": "Easy: moves at random.", "Medium": "Medium: takes a win and blocks yours, otherwise moves at random.",
+  "Hard": "Hard: plays very well but slips up now and then.", "Extra Hard": "Extra Hard: perfect play. It can't be beaten, the best you can do is a draw." };
+const T = { board: Array(9).fill(""), turn: "X", over: false, line: [], result: "", mode: "ai", level: "Medium", aiFirst: false, gen: 0, score: { me: 0, draw: 0, other: 0 } };
+const winnerOf = b => { for (const l of LINES) if (b[l[0]] && b[l[0]] === b[l[1]] && b[l[0]] === b[l[2]]) return { who: b[l[0]], line: l }; return null; };
+const freeCells = b => b.flatMap((v, i) => v ? [] : [i]);
+const humanSym = () => T.aiFirst ? "O" : "X", aiSym = () => T.aiFirst ? "X" : "O";
+
+function minimax(b, turn, ai, depth) {
+  const w = winnerOf(b); if (w) return w.who === ai ? 10 - depth : depth - 10;
+  const free = freeCells(b); if (!free.length) return 0;
+  let best = turn === ai ? -Infinity : Infinity;
+  for (const i of free) { b[i] = turn; const s = minimax(b, turn === "X" ? "O" : "X", ai, depth + 1); b[i] = ""; best = turn === ai ? Math.max(best, s) : Math.min(best, s); }
+  return best;
+}
+function perfectMove(b, ai) {
+  const other = ai === "X" ? "O" : "X"; let top = -Infinity, moves = [];
+  for (const i of freeCells(b)) { b[i] = ai; const s = minimax(b, other, ai, 1); b[i] = ""; if (s > top) { top = s; moves = [i]; } else if (s === top) moves.push(i); }
+  return pick(moves);
+}
+function simpleMove(b, ai) {                       // take a win, else block, else random
+  const other = ai === "X" ? "O" : "X";
+  for (const p of [ai, other]) for (const i of freeCells(b)) { b[i] = p; const w = winnerOf(b); b[i] = ""; if (w) return i; }
+  return pick(freeCells(b));
+}
+function aiPick(b, ai, level) {
+  if (level === "Easy") return pick(freeCells(b));
+  if (level === "Medium") return simpleMove(b, ai);
+  if (level === "Hard" && Math.random() < 0.2) return simpleMove(b, ai);
+  return perfectMove(b, ai);
+}
+
+function tttStatus() {
+  if (T.over) {
+    if (T.result === "draw") return "It's a draw.";
+    if (T.mode === "ai") return T.result === aiSym() ? "The AI wins. Try again!" : "You win!";
+    return "Player " + (T.result === "X" ? 1 : 2) + " (" + T.result + ") wins!";
+  }
+  if (T.mode === "ai") return T.turn === humanSym() ? "Your turn (" + humanSym() + ")" : "AI is thinking…";
+  return "Player " + (T.turn === "X" ? 1 : 2) + "'s turn (" + T.turn + ")";
+}
+function tttRender() {
+  $("#ttt-board").querySelectorAll("button").forEach((c, i) => {
+    const v = T.board[i]; c.textContent = v; c.className = "tcell" + (v ? " " + v.toLowerCase() : "") + (T.line.includes(i) ? " win" : "");
+    c.disabled = T.over || !!v || (T.mode === "ai" && T.turn !== humanSym());
+    c.setAttribute("aria-label", "Square " + (i + 1) + (v ? ", " + v : ", empty"));
+  });
+  $("#ttt-status").textContent = tttStatus();
+  const s = T.score; $("#ttt-score").textContent = T.mode === "ai" ? "You " + s.me + " | Draws " + s.draw + " | AI " + s.other : "Player 1 " + s.me + " | Draws " + s.draw + " | Player 2 " + s.other;
+}
+function tttNew() {
+  T.gen++; T.board = Array(9).fill(""); T.turn = "X"; T.over = false; T.line = []; T.result = "";
+  $("#ttt-ai").hidden = T.mode !== "ai"; $("#ttt-desc").textContent = LEVEL_INFO[T.level];
+  tttRender(); tttSchedule();
+}
+function tttSchedule() {
+  if (T.mode !== "ai" || T.over || T.turn !== aiSym()) return;
+  const g = T.gen; setTimeout(() => { if (g === T.gen && !T.over) tttMove(aiPick(T.board, aiSym(), T.level)); }, 450);
+}
+function tttMove(i) {
+  if (T.over || T.board[i]) return;
+  T.board[i] = T.turn; const w = winnerOf(T.board);
+  if (w || !freeCells(T.board).length) {
+    T.over = true; T.line = w ? w.line : []; T.result = w ? w.who : "draw";
+    const mine = T.mode === "ai" ? humanSym() : "X";
+    if (!w) T.score.draw++; else if (w.who === mine) T.score.me++; else T.score.other++;
+  } else T.turn = T.turn === "X" ? "O" : "X";
+  tttRender(); tttSchedule();
+}
+function tttSetup() {
+  const board = $("#ttt-board");
+  for (let i = 0; i < 9; i++) { const c = el("button", null, "tcell"); c.onclick = () => { if (T.mode === "ai" && T.turn !== humanSym()) return; tttMove(i); }; board.append(c); }
+  const press = (sel, key, val) => document.querySelectorAll(sel).forEach(b => b.onclick = () => {
+    T[key] = b.dataset[val]; document.querySelectorAll(sel).forEach(o => o.setAttribute("aria-pressed", String(o === b)));
+    T.score = { me: 0, draw: 0, other: 0 }; tttNew(); });
+  press("[data-mode]", "mode", "mode"); press("[data-level]", "level", "level");
+  $("#ttt-first").onchange = e => { T.aiFirst = e.target.checked; T.score = { me: 0, draw: 0, other: 0 }; tttNew(); };
+  $("#ttt-new").onclick = tttNew;
+  $("#g-ttt").onclick = () => { $("#gmenu").hidden = true; $("#ttt").hidden = false; tttNew(); };
+  $("#ttt-back").onclick = () => { T.gen++; $("#ttt").hidden = true; $("#gmenu").hidden = false; };
+}
+tttSetup();
 
 document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => {
   document.querySelectorAll("[data-tab]").forEach(o => o.setAttribute("aria-selected", o === b));
