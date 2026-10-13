@@ -86,6 +86,7 @@ td.num{font-weight:700;font-size:1.1rem}
 .tcell.steal{border-color:var(--bad)}
 .tcell:not(:disabled){cursor:pointer}
 .tcell.steal:hover{background:#3a2430}
+.olabel{display:inline-flex;align-items:center;gap:8px;color:var(--bad);font-weight:600;font-size:.95rem}
 </style>
 </head>
 <body>
@@ -109,6 +110,7 @@ td.num{font-weight:700;font-size:1.1rem}
     <div class="bar">
       <input type="search" id="q" placeholder="Search an item" aria-label="Search an item">
       <select id="type" aria-label="Filter by weapon type"><option value="">All weapon types</option></select>
+      <label class="olabel">Order <select id="order" aria-label="Order"><option value="rarity">By rarity</option><option value="asc">Least value to most value</option><option value="desc">Most value to least value</option></select></label>
     </div>
     <div id="groups"></div>
     <p class="small" id="meta"></p>
@@ -175,6 +177,11 @@ td.num{font-weight:700;font-size:1.1rem}
   <section id="tab-log" hidden>
     <h2>Update logs</h2>
     <article class="logentry">
+      <h3>Update 1.3</h3>
+      <p class="small">13 October</p>
+      <ul><li>Added order</li><li>Added new values from 11 October</li></ul>
+    </article>
+    <article class="logentry">
       <h3>Update 1.2</h3>
       <p class="small">11 October</p>
       <ul><li>Added games</li><li>Fixed AI</li></ul>
@@ -222,11 +229,11 @@ const RARITIES = [["Common","#9aa0a6"],["Uncommon","#4aa3ff"],["Rare","#4ad66d"]
 const RAINBOW = "linear-gradient(90deg,#ff4d4d,#ffb84d,#f2e94d,#4dff88,#4dc3ff,#9b6bff,#ff4fd8)";
 let sel = "";
 
-function cardFor(it, color) {
+function cardFor(it, color, showRarity) {
   const x = mix(it), c = el("div", null, "card");
   if (color === "rainbow") { c.classList.add("rainbow"); c.style.setProperty("--g", RAINBOW); }
   else c.style.setProperty("--c", color);
-  c.append(el("div", it.name, "cname"), el("div", it.type, "small"));
+  c.append(el("div", it.name, "cname"), el("div", it.type + (showRarity && it.rarity ? ", " + it.rarity : ""), "small"));
   const rs = !x && it.rarityNum != null;
   c.append(el("div", x ? (x.m == null ? x.text : fmt(x.m)) : rs ? "Rarity " + it.rarityNum : "–", "cval" + (x && x.m == null ? " ctext" : "")));
   c.append(el("div", x ? x.src : rs ? "Supreme Values" : "No value yet", "small"));
@@ -249,10 +256,25 @@ function renderChips() {
   all.filter(r => counts[r[0]]).forEach(r => mk(r[0], r[1], counts[r[0]]));
 }
 
+function groupNameOf(it) { const r = RARITIES.find(x => x[0].toLowerCase() === (it.rarity || "").toLowerCase()); return r ? r[0] : "Unknown"; }
+function rarityEntry(it) { const r = RARITIES.find(x => x[0].toLowerCase() === (it.rarity || "").toLowerCase()); return r ? r[1] : "#6b7694"; }
+
+function renderFlat(list, order, box) {                // one list sorted by value; items without a number go last
+  const num = i => { const x = mix(i); return x && x.m != null ? x.m : null; };
+  const items = list.filter(i => !sel || groupNameOf(i) === sel);
+  const sorted = items.filter(i => num(i) != null).sort((a, b) => order === "asc" ? num(a) - num(b) : num(b) - num(a)).concat(items.filter(i => num(i) == null));
+  if (!sorted.length) { box.append(el("p", "No items found. Try another search.", "small")); return; }
+  const sec = el("section", null, "group"), h = el("h2", order === "asc" ? "Least value to most value" : "Most value to least value");
+  h.append(el("small", sorted.length + " items"));
+  const grid = el("div", null, "grid"); sorted.forEach(it => grid.append(cardFor(it, rarityEntry(it), true)));
+  sec.append(h, grid); box.append(sec);
+}
+
 function renderTable() {
   const q = $("#q").value.trim().toLowerCase(), t = $("#type").value;
   const box = $("#groups"); box.replaceChildren();
   const list = D.items.filter(i => i.name.toLowerCase().includes(q) && (!t || i.type === t));
+  const order = $("#order").value; if (order !== "rarity") { renderFlat(list, order, box); return; }
   const known = RARITIES.map(r => r[0].toLowerCase());
   const groups = RARITIES.map(([n, c]) => [n, c, list.filter(i => (i.rarity || "").toLowerCase() === n.toLowerCase())]);
   groups.push(["Unknown", "#6b7694", list.filter(i => !known.includes((i.rarity || "").toLowerCase()))]);
@@ -322,7 +344,7 @@ async function init() {
   }
   [...new Set(D.items.map(i => i.type))].forEach(t => { const o = el("option", t); o.value = t; $("#type").append(o); });
   $("#meta").textContent = "Sources: " + Object.values(D.sources).map(s => s.label).join(", ") + ". Last updated: " + D.updated + ".";
-  $("#q").oninput = renderTable; $("#type").onchange = renderTable;
+  $("#q").oninput = renderTable; $("#type").onchange = renderTable; $("#order").onchange = renderTable;
   $("#cq").oninput = renderResults; renderResults();
   renderChips(); renderTable(); renderCalc();
   $("#ask").onclick = ask; $("#aq").onkeydown = e => { if (e.key === "Enter") ask(); };
